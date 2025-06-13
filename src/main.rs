@@ -265,7 +265,7 @@ impl Chip8 {
         
         for y in 0..DISPLAY_HEIGHT {
             for x in 0..DISPLAY_WIDTH {
-                let i = y * DISPLAY_WIDTH + x;
+                let i: usize = y * DISPLAY_WIDTH + x;
                 buffer[i] = if self.display[y][x] {
                     0xFFFFFF // white
                 } else {
@@ -287,8 +287,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     WindowOptions {
         scale: minifb::Scale::X16, // Scale the window by 16
         ..WindowOptions::default()
-    },
-)?;
+    })?;
 
     let mut buffer = [0u32; 64 * 32];
     while window.is_open() && !window.is_key_down(minifb::Key::Escape) {
