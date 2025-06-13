@@ -34,11 +34,11 @@ struct Chip8 {
     sound_timer: u8,
     keypad: [bool; 16],
     draw_flag: bool,
-    y_shift: bool
+    super_chip_support: bool
 }
 
 impl Chip8 {
-    pub fn new() -> Self {
+    pub fn new(super_chip_support: bool) -> Self {
         let mut chip8 = Chip8 {
             memory: [0; 4096],
             v: [0; 16],
@@ -51,7 +51,7 @@ impl Chip8 {
             sound_timer: 0,
             keypad: [false; 16],
             draw_flag: false,
-            y_shift: true
+            super_chip_support: super_chip_support
         };
 
         for (i, byte) in FONTSET.iter().enumerate() {
@@ -174,7 +174,7 @@ impl Chip8 {
                     0x0006 => {
                         // YSHIFT:    8XY6 VX = VY >> 1
                         // No YSHIFT: 8XY6 VX = VX >> 1
-                        let shift_src = if self.y_shift { Y } else { X };
+                        let shift_src = if self.super_chip_support { X } else { Y };
                         self.v[0xF] = self.v[shift_src] >> 7;
                         self.v[X] = self.v[shift_src] >> 1;
                     }
@@ -187,7 +187,7 @@ impl Chip8 {
                     0x000E => {
                         // YSHIFT:    8XYE VX = VY << 1
                         // No YSHIFT: 8XYE VX = VX << 1
-                        let shift_src = if self.y_shift { Y } else { X };
+                        let shift_src = if self.super_chip_support { X } else { Y };
                         self.v[0xF] = self.v[shift_src] >> 7;
                         self.v[X] = self.v[shift_src] << 1;
                     }
@@ -207,9 +207,10 @@ impl Chip8 {
                 self.i = NNN;
             }
             0xB000 => {
-                match opcode {
-                    _ => { println!("Unknown opcode: {:04X}", opcode); }
-                }
+                // CHIP-8:     0xBNNN Jump to NNN + V0
+                // SUPER-CHIP: 0xBXNN Jump to XNN + VX
+                let v_src = if self.super_chip_support { X } else { 0 };
+                self.pc = NNN + self.v[v_src] as u16;
             }
             0xC000 => {
                 match opcode {
@@ -280,7 +281,7 @@ impl Chip8 {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut chip8 = Chip8::new();
+    let mut chip8 = Chip8::new(false);
     chip8.load_rom("roms/ibm-logo.ch8")?;
     
     let mut window = Window::new("CHIP-8", DISPLAY_WIDTH, DISPLAY_HEIGHT, 
