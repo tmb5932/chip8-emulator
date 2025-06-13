@@ -1,4 +1,6 @@
 use minifb::{Window, WindowOptions};
+use rand::{RngCore, SeedableRng};
+use rand_chacha::ChaCha8Rng;
 
 const DISPLAY_WIDTH: usize = 64;
 const DISPLAY_HEIGHT: usize = 32;
@@ -34,6 +36,7 @@ struct Chip8 {
     sound_timer: u8,
     keypad: [bool; 16],
     draw_flag: bool,
+    rng: ChaCha8Rng,
     super_chip_support: bool
 }
 
@@ -51,6 +54,7 @@ impl Chip8 {
             sound_timer: 0,
             keypad: [false; 16],
             draw_flag: false,
+            rng: ChaCha8Rng::from_seed(Default::default()),
             super_chip_support: super_chip_support
         };
 
@@ -213,9 +217,9 @@ impl Chip8 {
                 self.pc = NNN + self.v[v_src] as u16;
             }
             0xC000 => {
-                match opcode {
-                    _ => { println!("Unknown opcode: {:04X}", opcode); }
-                }
+                // VX = random number bitwise & with NN
+                let random_byte: u8 = (self.rng.next_u32() & 0xFF) as u8;
+                self.v[X] = random_byte & NN;
             }
             0xD000 => {
                 // Alter Display
