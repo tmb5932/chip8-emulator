@@ -26,6 +26,35 @@ const FONTSET: [u8; 80] = [
     0xF0, 0x80, 0xF0, 0x80, 0x80  // F
 ];
 
+struct Instruction {
+    instruction: u16,
+    nibble: u8,
+    x: usize,
+    y: usize,
+    n: u8,
+    nn: u8,
+    nnn: u16
+}
+
+impl Instruction {
+    pub fn new(inst: u16) -> Self {
+        Instruction {
+            instruction: inst,
+            nibble: ((inst & 0xF000) >> 12) as u8,
+            // X: The second nibble. Used to look up one of the 16 registers (VX) from V0 through VF.
+            x: ((inst & 0x0F00) >> 8) as usize,
+            // Y: The third nibble. Also used to look up one of the 16 registers (VY) from V0 through VF.
+            y: ((inst & 0x00F0) >> 4) as usize,
+            // N: The fourth nibble. A 4-bit number.
+            n: (inst & 0x000F) as u8,
+            // NN: The second byte (third and fourth nibbles). An 8-bit immediate number.
+            nn: (inst & 0x00FF) as u8,
+            // NNN: The second, third and fourth nibbles. A 12-bit immediate memory address.
+            nnn: inst & 0x0FFF,
+        }
+    }
+}
+
 struct Chip8 {
     memory: [u8; 4096],
     v: [u8; 16],
@@ -79,167 +108,156 @@ impl Chip8 {
         Ok(())
     }
 
-    pub fn fetch(&mut self) -> u16 {
-        let instruction = (self.memory[self.pc as usize] as u16) << 8 |  self.memory[(self.pc + 1) as usize] as u16;
+    pub fn fetch(&mut self) -> Instruction {
+        let raw = (self.memory[self.pc as usize] as u16) << 8 |  self.memory[(self.pc + 1) as usize] as u16;
         self.pc += 2;
-        instruction
+        Instruction::new(raw)
     }
 
-    pub fn execute(&mut self, opcode: u16) -> std::io::Result<()> {
-                // X: The second nibble. Used to look up one of the 16 registers (VX) from V0 through VF.
-                let x: usize = ((opcode & 0x0F00) >> 8) as usize;
-                // Y: The third nibble. Also used to look up one of the 16 registers (VY) from V0 through VF.
-                let y: usize = ((opcode & 0x00F0) >> 4) as usize;
-                // N: The fourth nibble. A 4-bit number.
-                let n: u8 = (opcode & 0x000F) as u8;
-                // NN: The second byte (third and fourth nibbles). An 8-bit immediate number.
-                let nn: u8 = (opcode & 0x00FF) as u8;
-                // NNN: The second, third and fourth nibbles. A 12-bit immediate memory address.
-                let nnn: u16 = opcode & 0x0FFF;
-        
+    pub fn execute(&mut self, inst: Instruction) -> std::io::Result<()> {
                 // Execute
-                match opcode & 0xF000 {
-                    0x0000 => {
-                        match opcode {
-                            0x00E0 => { self.display = [[false; DISPLAY_WIDTH]; DISPLAY_HEIGHT]; },
-                            0x00EE => { 
+                match inst.nibble {
+                    0x0 => {
+                        match inst.nn {
+                            0xE0 => { self.display = [[false; DISPLAY_WIDTH]; DISPLAY_HEIGHT]; },
+                            0xEE => { 
                                 // return from sub function
                                 self.sp -= 1;
                                 self.pc = self.stack[self.sp];
                             },
-                            _ => { println!("Unknown opcode: {:04X}", opcode); }
+                            _ => { println!("Unknown opcode: {:04X}", inst.instruction); }
                         }
                     }
-                    0x1000 => {
+                    0x1 => {
                         // Jump: PC = NNN
-                        self.pc = nnn;
+                        self.pc = inst.nnn;
                     }
-                    0x2000 => {
+                    0x2 => {
                         // JAL: STACK[SP] = PC AND PC = NNN
                         self.stack[self.sp] = self.pc;
                         self.sp += 1;
-                        self.pc = nnn;
+                        self.pc = inst.nnn;
                     }
-                    0x3000 => {
+                    0x3 => {
                         // Skip 1 instruction if VX == NN
-                        if self.v[x] == nn {
+                        if self.v[inst.x] == inst.nn {
                             self.pc += 2;
                         }
                     }
-                    0x4000 => {
+                    0x4 => {
                         // Skip 1 instruction if VX != NN
-                        if self.v[x] != nn {
+                        if self.v[inst.x] != inst.nn {
                             self.pc += 2;
                         }
                     }
-                    0x5000 => {
-                        match opcode & 0x000F {
-                            0x000 => {
+                    0x5 => {
+                        match inst.n {
+                            0x0 => {
                                 // Skip 1 instruction if VX == VY
-                                if self.v[x] == self.v[y] {
+                                if self.v[inst.x] == self.v[inst.y] {
                                     self.pc += 2;
                                 }
                             }
                             _ => { panic!("IMPOSSIBLE NIBBLE!") }
                         }
                     }
-                    0x6000 => {
+                    0x6 => {
                         // SET: VX = NN
-                        self.v[x] = nn;
+                        self.v[inst.x] = inst.nn;
                     }
-                    0x7000 => {
+                    0x7 => {
                         // ADD: VX = VX + NN
-                        let (result, _) = self.v[x].overflowing_add(nn);
-                        self.v[x] = result;
+                        let (result, _) = self.v[inst.x].overflowing_add(inst.nn);
+                        self.v[inst.x] = result;
                     }
-                    0x8000 => {
-                        match opcode & 0x000F {
+                    0x8 => {
+                        match inst.n {
                             // BINARY OPS
-                            0x0000 => {
+                            0x0 => {
                                 // SET: VX = VY
-                                self.v[x] = self.v[y];
+                                self.v[inst.x] = self.v[inst.y];
                             }
-                            0x0001 => {
+                            0x1 => {
                                 // OR: VX = VX OR VY
-                                self.v[x] = self.v[x] | self.v[y];
+                                self.v[inst.x] = self.v[inst.x] | self.v[inst.y];
                             }
-                            0x0002 => {
+                            0x2 => {
                                 // AND: VX = VX AND VY
-                                self.v[x] = self.v[x] & self.v[y];
+                                self.v[inst.x] = self.v[inst.x] & self.v[inst.y];
                             }
-                            0x0003 => {
+                            0x3 => {
                                 // XOR: VX = VX XOR VY
-                                self.v[x] = self.v[x] ^ self.v[y];
+                                self.v[inst.x] = self.v[inst.x] ^ self.v[inst.y];
                             }
-                            0x0004 => {
+                            0x4 => {
                                 // ADD (with overflow): VX = VX + VY
-                                let (sum, carry) = self.v[x].overflowing_add(self.v[y]);
-                                self.v[x] = sum;
+                                let (sum, carry) = self.v[inst.x].overflowing_add(self.v[inst.y]);
+                                self.v[inst.x] = sum;
                                 self.v[0xF] = if carry { 1 } else { 0 };
                             }
-                            0x0005 => {
+                            0x5 => {
                                 // 8XY5 sets VX to the result of VX - VY.                        
-                                let (result, borrowed) = self.v[x].overflowing_sub(self.v[y]);
-                                self.v[x] = result;
+                                let (result, borrowed) = self.v[inst.x].overflowing_sub(self.v[inst.y]);
+                                self.v[inst.x] = result;
                                 self.v[0xF] = if borrowed { 0 } else { 1 };
                             }
-                            0x0006 => {
+                            0x6 => {
                                 // YSHIFT:    8XY6 VX = VY >> 1
                                 // No YSHIFT: 8XY6 VX = VX >> 1
-                                let shift_src = if self.super_chip_support { x } else { y };
+                                let shift_src = if self.super_chip_support { inst.x } else { inst.y };
                                 self.v[0xF] = self.v[shift_src] >> 7;
-                                self.v[x] = self.v[shift_src] >> 1;
+                                self.v[inst.x] = self.v[shift_src] >> 1;
                             }
-                            0x0007 => {
+                            0x7 => {
                                 // 8XY7 sets VX to the result of VY - VX.
-                                let (result, borrowed) = self.v[y].overflowing_sub(self.v[x]);
-                                self.v[x] = result;
+                                let (result, borrowed) = self.v[inst.y].overflowing_sub(self.v[inst.x]);
+                                self.v[inst.x] = result;
                                 self.v[0xF] = if borrowed { 0 } else { 1 };
                             }
-                            0x000E => {
+                            0xE => {
                                 // YSHIFT:    8XYE VX = VY << 1
                                 // No YSHIFT: 8XYE VX = VX << 1
-                                let shift_src = if self.super_chip_support { x } else { y };
+                                let shift_src = if self.super_chip_support { inst.x } else { inst.y };
                                 self.v[0xF] = self.v[shift_src] >> 7;
-                                self.v[x] = self.v[shift_src] << 1;
+                                self.v[inst.x] = self.v[shift_src] << 1;
                             }
                             _ => {
                                 panic!("IMPOSSIBLE NIBBLE!");
                             }
                         }
                     }
-                    0x9000 => {
-                        match opcode & 0x000F {
-                            0x000 => {
+                    0x9 => {
+                        match inst.n {
+                            0x0 => {
                                 // Skip 1 instruction if VX != VY
-                                if self.v[x] != self.v[y] {
+                                if self.v[inst.x] != self.v[inst.y] {
                                     self.pc += 2;
                                 }
                             }
                             _ => { panic!("IMPOSSIBLE NIBBLE!") }
                         }
                     }
-                    0xA000 => {
+                    0xA => {
                         // I = NNN
-                        self.i = nnn;
+                        self.i = inst.nnn;
                     }
-                    0xB000 => {
+                    0xB => {
                         // CHIP-8:     0xBNNN Jump to NNN + V0
                         // SUPER-CHIP: 0xBXNN Jump to XNN + VX
-                        let v_src = if self.super_chip_support { x } else { 0 };
-                        self.pc = nnn + self.v[v_src] as u16;
+                        let v_src = if self.super_chip_support { inst.x } else { 0 };
+                        self.pc = inst.nnn + self.v[v_src] as u16;
                     }
-                    0xC000 => {
+                    0xC => {
                         // VX = random number bitwise & with NN
                         let random_byte: u8 = (self.rng.next_u32() & 0xFF) as u8;
-                        self.v[x] = random_byte & nn;
+                        self.v[inst.x] = random_byte & inst.nn;
                     }
-                    0xD000 => {
+                    0xD => {
                         // Alter Display
-                        let x_coord = self.v[x] as usize % DISPLAY_WIDTH;
-                        let y_coord = self.v[y] as usize % DISPLAY_HEIGHT;
+                        let x_coord = self.v[inst.x] as usize % DISPLAY_WIDTH;
+                        let y_coord = self.v[inst.y] as usize % DISPLAY_HEIGHT;
                         self.v[0xF] = 0; // Reset collision flag
-                        for index in 0..n as usize {
+                        for index in 0..inst.n as usize {
                             let sprite_byte = self.memory[self.i as usize + index];
                             
                             for bit_index in 0..8 {
@@ -261,36 +279,36 @@ impl Chip8 {
                         self.draw_flag = true;
         
                     }
-                    0xE000 => {
-                        match opcode & 0x00FF {
-                            0x009E => {
+                    0xE => {
+                        match inst.nn {
+                            0x9E => {
                                 // Skip next instruction if X key is pressed
-                                if self.keypad[self.v[x] as usize] {
+                                if self.keypad[self.v[inst.x] as usize] {
                                     self.pc += 2;
                                 }
                             }
-                            0x00A1 => {
+                            0xA1 => {
                                 // Skip next instruction if X key is NOT pressed
-                                if !self.keypad[self.v[x] as usize] {
+                                if !self.keypad[self.v[inst.x] as usize] {
                                     self.pc += 2;
                                 }
                             }
-                            _ => { println!("Unknown opcode: {:04X}", opcode); }
+                            _ => { println!("Unknown opcode: {:04X}", inst.instruction); }
                         }
                     }
-                    0xF000 => {
-                        match opcode & 0x00FF {
+                    0xF => {
+                        match inst.nn {
                             // Timer Instructions
-                            0x007 => {
+                            0x07 => {
                                 // Set VX to current value of Delay Timer
-                                self.v[x] = self.delay_timer;
+                                self.v[inst.x] = self.delay_timer;
                             }
-                            0x00A => {
+                            0x0A => {
                                 // Wait til any button is pressed
                                 let mut key_pressed: bool = false;
                                 for (i, &pressed) in self.keypad.iter().enumerate() {
                                     if pressed {
-                                        self.v[x] = i as u8;
+                                        self.v[inst.x] = i as u8;
                                         key_pressed = true;
                                         break;
                                     }
@@ -300,52 +318,52 @@ impl Chip8 {
                                     self.pc -= 2;
                                 }
                             }
-                            0x015 => {
+                            0x15 => {
                                 // Sets the Delay Timer to the value in VX
-                                self.delay_timer = self.v[x];
+                                self.delay_timer = self.v[inst.x];
                             }
-                            0x018 => {
+                            0x18 => {
                                 // Sets the sound timer to the value in VX
-                                self.sound_timer = self.v[x];
+                                self.sound_timer = self.v[inst.x];
                             }
-                            0x01E => {
+                            0x1E => {
                                 // I = I + VX
-                                let (result, overflow) = self.i.overflowing_add(self.v[x] as u16);
+                                let (result, overflow) = self.i.overflowing_add(self.v[inst.x] as u16);
                                 self.i = result;
                                 self.v[0xF] = if overflow { 1 } else { 0 };
                             }
-                            0x029 => {
+                            0x29 => {
                                 // I = location of sprite for digit in VX
-                                self.i = FONTSET_START as u16 + (self.v[x] as u16 * 5);
+                                self.i = FONTSET_START as u16 + (self.v[inst.x] as u16 * 5);
                             }
-                            0x033 => {
+                            0x33 => {
                                 // Store number in VX as three decimal digits, and stores in mem at location in reg I
-                                let value = self.v[x];
+                                let value = self.v[inst.x];
                                 self.memory[self.i as usize] = value / 100;
                                 self.memory[self.i as usize + 1] = (value % 100) / 10;
                                 self.memory[self.i as usize + 2] = value % 10;
                             }
-                            0x055 => {
+                            0x55 => {
                                 // Store V0-VX variables in memory
-                                for step in 0..=x {
+                                for step in 0..=inst.x {
                                     self.memory[self.i as usize + step] = self.v[step];
                                 }
                                 // Original Chip-8 incremented I, but modern don't update I
                                 // if !self.super_chip_support {
-                                //     self.i += x as u16 + 1;
+                                //     self.i += inst.x as u16 + 1;
                                 // }
                             }
-                            0x065 => {
+                            0x65 => {
                                 // Loads from memory variables into V0-VX
-                                for step in 0..=x {
+                                for step in 0..=inst.x {
                                     self.v[step] = self.memory[self.i as usize + step];
                                 }
                                 // Original Chip-8 incremented I, but modern don't update I
                                 // if !self.super_chip_support {
-                                //     self.i += x as u16 + 1;
+                                //     self.i += inst.x as u16 + 1;
                                 // }
                             }
-                            _ => { println!("Unknown opcode: {:04X}", opcode); }
+                            _ => { println!("Unknown opcode: {:04X}", inst.instruction); }
                         }
                     }
                     _ => {
@@ -357,10 +375,10 @@ impl Chip8 {
 
     pub fn cycle(&mut self) -> std::io::Result<()> {
         // Fetch
-        let opcode = self.fetch();
+        let instruction: Instruction = self.fetch();
         
         // Decode/Execute
-        self.execute(opcode)
+        self.execute(instruction)
     }
 
     pub fn run_display(&self, window: &mut Window, buffer: &mut [u32; 64 * 32]) 
