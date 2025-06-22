@@ -439,7 +439,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut chip8 = Chip8::new(false);
 
-    chip8.load_rom("roms/Pong (1 player).ch8")?;
+    chip8.load_rom("roms/games/chip8-emulator-logo.ch8")?;
 
     let mut event_pump = sdl.event_pump().unwrap();
 
