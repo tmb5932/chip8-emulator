@@ -1,6 +1,7 @@
 use rand::{RngCore, SeedableRng};
 use rand_chacha::ChaCha8Rng;
-use sdl2::{keyboard::Keycode, pixels::PixelFormatEnum, render::{Canvas, Texture, TextureCreator}, video::{Window, WindowContext}, EventPump, Sdl};
+use sdl2::{event::Event, keyboard::Keycode, pixels::PixelFormatEnum, render::{Canvas, Texture}, video::Window};
+use std::time::{Duration, Instant};
 
 const DISPLAY_WIDTH: usize = 64;
 const DISPLAY_HEIGHT: usize = 32;
@@ -49,79 +50,6 @@ pub fn map_keycode(key: Keycode) -> Option<usize> {
     }
 }
 
-pub struct DisplaySystem {
-    canvas: Canvas<Window>,
-    texture_creator: TextureCreator<WindowContext>,
-    event_pump: EventPump,
-}
-
-impl DisplaySystem {
-    pub fn new(sdl_context: &Sdl) -> Self {
-        let video_subsystem = sdl_context.video().unwrap();
-
-        let window = video_subsystem
-            .window("CHIP-8 Emulator", DISPLAY_WIDTH as u32 * SCALE, DISPLAY_HEIGHT as u32 * SCALE)
-            .position_centered()
-            .build()
-            .unwrap();
-
-        let canvas = window.into_canvas().accelerated().build().unwrap();
-        let texture_creator: TextureCreator<WindowContext> = canvas.texture_creator();
-        let event_pump = sdl_context.event_pump().unwrap();
-
-        DisplaySystem {
-            canvas,
-            texture_creator,
-            event_pump,
-        }
-    }
-
-    pub fn draw(&mut self, display: &[[bool; 64]; 32]) {
-        let mut texture = self.texture_creator
-        .create_texture_streaming(PixelFormatEnum::RGB24, 64, 32)
-        .unwrap();
-    
-        // Lock and draw to texture
-        texture.with_lock(None, |buffer: &mut [u8], pitch: usize| {
-            for y in 0..32 {
-                for x in 0..64 {
-                    let offset: usize = y * pitch + x * 3;
-                    let on = display[y][x];
-                    buffer[offset] = if on { 0xFF } else { 0x00 };     // R
-                    buffer[offset + 1] = if on { 0xFF } else { 0x00 }; // G
-                    buffer[offset + 2] = if on { 0xFF } else { 0x00 }; // B
-                }
-            }
-        }).unwrap();
-        
-        // Copy and present
-        self.canvas.copy(&texture, None, None).unwrap();
-        self.canvas.present();
-    }
-
-    pub fn handle_input(&mut self, keypad: &mut [bool; 16]) {
-        for event in self.event_pump.poll_iter() {
-            use sdl2::event::Event;
-            use sdl2::keyboard::Keycode;
-
-            match event {
-                Event::Quit { .. } => std::process::exit(0),
-                Event::KeyDown { keycode: Some(key), .. } => {
-                    if let Some(i) = map_keycode(key) {
-                        keypad[i] = true;
-                    }
-                }
-                Event::KeyUp { keycode: Some(key), .. } => {
-                    if let Some(i) = map_keycode(key) {
-                        keypad[i] = false;
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
-}
-
 struct Instruction {
     instruction: u16,
     nibble: u8,
@@ -164,11 +92,12 @@ struct Chip8 {
     keypad: [bool; 16],
     draw_flag: bool,
     rng: ChaCha8Rng,
-    super_chip_support: bool
+    super_chip_support: bool,
+
 }
 
 impl Chip8 {
-    pub fn new( super_chip_support: bool) -> Self {
+    pub fn new(super_chip_support: bool) -> Self {
         let mut chip8 = Chip8 {
             memory: [0; 4096],
             v: [0; 16],
@@ -182,7 +111,7 @@ impl Chip8 {
             keypad: [false; 16],
             draw_flag: false,
             rng: ChaCha8Rng::from_seed(Default::default()),
-            super_chip_support: super_chip_support
+            super_chip_support: super_chip_support,
         };
 
         for (i, byte) in FONTSET.iter().enumerate() {
@@ -254,7 +183,7 @@ impl Chip8 {
                                     self.pc += 2;
                                 }
                             }
-                            _ => { panic!("IMPOSSIBLE NIBBLE!") }
+                            _ => { panic!("Unknown opcode: {:04X}", inst.instruction); }
                         }
                     }
                     0x6 => {
@@ -317,9 +246,7 @@ impl Chip8 {
                                 self.v[0xF] = self.v[shift_src] >> 7;
                                 self.v[inst.x] = self.v[shift_src] << 1;
                             }
-                            _ => {
-                                panic!("IMPOSSIBLE NIBBLE!");
-                            }
+                            _ => { panic!("Unknown opcode: {:04X}", inst.instruction); }
                         }
                     }
                     0x9 => {
@@ -330,7 +257,7 @@ impl Chip8 {
                                     self.pc += 2;
                                 }
                             }
-                            _ => { panic!("IMPOSSIBLE NIBBLE!") }
+                            _ => { panic!("Unknown opcode: {:04X}", inst.instruction) }
                         }
                     }
                     0xA => {
@@ -389,7 +316,7 @@ impl Chip8 {
                                     self.pc += 2;
                                 }
                             }
-                            _ => { println!("Unknown opcode: {:04X}", inst.instruction); }
+                            _ => { panic!("Unknown opcode: {:04X}", inst.instruction) }
                         }
                     }
                     0xF => {
@@ -463,7 +390,7 @@ impl Chip8 {
                         }
                     }
                     _ => {
-                        panic!("IMPOSSIBLE NIBBLE!");
+                        panic!("IMPOSSIBLE NIBBLE! {}", inst.instruction)
                     }
                 }
                 Ok(())        
@@ -476,66 +403,84 @@ impl Chip8 {
         // Decode/Execute
         self.execute(instruction)
     }
+}
 
-    pub fn run_display(&self, canvas: &mut sdl2::render::Canvas<sdl2::video::Window>, texture: &mut sdl2::render::Texture<'_>) 
-    -> Result<(), Box<dyn std::error::Error>> {    
-        // Convert display into pixel buffer
-        texture.with_lock(None, |buffer: &mut [u8], pitch: usize| {
-            for y in 0..DISPLAY_HEIGHT {
-                for x in 0..DISPLAY_WIDTH {
-                    let offset = y * pitch + x * 3;
-                    let color = if self.display[y][x] { 0xFF } else { 0x00 };
-                    buffer[offset] = color;     // R
-                    buffer[offset + 1] = color; // G
-                    buffer[offset + 2] = color; // B
-                }
+pub fn update_texture(canvas: &mut Canvas<Window>, texture: &mut Texture, display: [[bool; DISPLAY_WIDTH]; DISPLAY_HEIGHT]) {
+    texture.with_lock(None, |buffer: &mut [u8], pitch: usize| {
+        for y in 0..DISPLAY_HEIGHT {
+            for x in 0..DISPLAY_WIDTH {
+                let i = y * pitch + x * 3;
+                let pixel = if display[y][x] { 255 } else { 0 };
+                buffer[i] = pixel;     // R
+                buffer[i + 1] = pixel; // G
+                buffer[i + 2] = pixel; // B
             }
-        })?;
+        }
+    }).unwrap();
 
-        canvas.clear();
-        canvas.copy(&texture, None, None)?;
-        canvas.present();
-            
-        Ok(())
-    }
+    canvas.copy(&texture, None, None).unwrap();
+    canvas.present();
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let sdl_context = sdl2::init()?;
-    let video_subsystem = sdl_context.video()?;
+    let sdl = sdl2::init().unwrap();
+    let video = sdl.video().unwrap();
 
-    let window = video_subsystem
-        .window("CHIP-8 Emulator", 64 * SCALE, 32 * SCALE)
+    let window = video.window("CHIP-8", DISPLAY_WIDTH as u32 * SCALE, DISPLAY_HEIGHT as u32 * SCALE)
         .position_centered()
-        .build()?;
+        .build()
+        .unwrap();
 
-    let mut canvas = window.into_canvas().present_vsync().build()?;
+    let mut canvas = window.into_canvas().present_vsync().build().unwrap();
     let texture_creator = canvas.texture_creator();
+    let mut texture = texture_creator
+        .create_texture_streaming(PixelFormatEnum::RGB24, DISPLAY_WIDTH as u32, DISPLAY_HEIGHT as u32)
+        .unwrap();
 
-    let mut display = DisplaySystem::new(canvas, texture_creator);
     let mut chip8 = Chip8::new(false);
 
-    chip8.load_rom("roms/3-test-opcode.ch8")?;
+    chip8.load_rom("roms/Pong (1 player).ch8")?;
 
-    // input system
-    let mut event_pump = sdl_context.event_pump()?;
+    let mut event_pump = sdl.event_pump().unwrap();
 
+    let timer_interval = Duration::from_millis(16); // ~60Hz
+    let mut last_timer_tick = Instant::now();
 
+    'running: loop {
+        for event in event_pump.poll_iter() {
+            match event {
+                Event::Quit { .. } => break 'running,
+                Event::KeyDown { keycode: Some(key), .. } => {
+                    if let Some(index) = map_keycode(key) {
+                        chip8.keypad[index] = true;
+                    }
+                }
+                Event::KeyUp { keycode: Some(key), .. } => {
+                    if let Some(index) = map_keycode(key) {
+                        chip8.keypad[index] = false;
+                    }
+                }
+                _ => {}
+            }
+        }
+        if last_timer_tick.elapsed() >= timer_interval {
+            if chip8.delay_timer > 0 {
+                chip8.delay_timer -= 1;
+            }
+            if chip8.sound_timer > 0 {
+                chip8.sound_timer -= 1;
+            }
+            last_timer_tick = Instant::now();
+        }
 
-
-
-
-    loop {
-        chip8.cycle()?; // run one instruction
+        chip8.cycle().unwrap();
 
         if chip8.draw_flag {
-
             chip8.draw_flag = false;
+
+            update_texture(&mut canvas, &mut texture, chip8.display);
         }
     }
-
-    // Optional: sleep to control speed
-    std::thread::sleep(std::time::Duration::from_millis(2));
 
     Ok(())
 }
