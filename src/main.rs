@@ -92,12 +92,15 @@ struct Chip8 {
     keypad: [bool; 16],
     draw_flag: bool,
     rng: ChaCha8Rng,
-    super_chip_support: bool,
 
+    // Quirks
+    shift_quirk: bool,
+    ld_quirk: bool,
+    jump_quirk: bool
 }
 
 impl Chip8 {
-    pub fn new(super_chip_support: bool) -> Self {
+    pub fn new() -> Self {
         let mut chip8 = Chip8 {
             memory: [0; 4096],
             v: [0; 16],
@@ -111,7 +114,9 @@ impl Chip8 {
             keypad: [false; 16],
             draw_flag: false,
             rng: ChaCha8Rng::from_seed(Default::default()),
-            super_chip_support: super_chip_support,
+            shift_quirk: false,
+            ld_quirk: false,
+            jump_quirk: false
         };
 
         for (i, byte) in FONTSET.iter().enumerate() {
@@ -119,6 +124,12 @@ impl Chip8 {
         }
 
         chip8
+    }
+
+    pub fn quirks(&mut self, shift: bool, ld: bool, jump: bool) {
+        self.shift_quirk = shift;
+        self.ld_quirk = ld;
+        self.jump_quirk = jump;
     }
 
     pub fn load_rom(&mut self, filename: &str) -> std::io::Result<()> {
@@ -229,7 +240,7 @@ impl Chip8 {
                             0x6 => {
                                 // YSHIFT:    8XY6 VX = VY >> 1
                                 // No YSHIFT: 8XY6 VX = VX >> 1
-                                let shift_src = if self.super_chip_support { inst.x } else { inst.y };
+                                let shift_src = if self.shift_quirk { inst.x } else { inst.y };
                                 self.v[0xF] = self.v[shift_src] >> 7;
                                 self.v[inst.x] = self.v[shift_src] >> 1;
                             }
@@ -242,7 +253,7 @@ impl Chip8 {
                             0xE => {
                                 // YSHIFT:    8XYE VX = VY << 1
                                 // No YSHIFT: 8XYE VX = VX << 1
-                                let shift_src = if self.super_chip_support { inst.x } else { inst.y };
+                                let shift_src = if self.shift_quirk { inst.x } else { inst.y };
                                 self.v[0xF] = self.v[shift_src] >> 7;
                                 self.v[inst.x] = self.v[shift_src] << 1;
                             }
@@ -267,7 +278,7 @@ impl Chip8 {
                     0xB => {
                         // CHIP-8:     0xBNNN Jump to NNN + V0
                         // SUPER-CHIP: 0xBXNN Jump to XNN + VX
-                        let v_src = if self.super_chip_support { inst.x } else { 0 };
+                        let v_src = if self.jump_quirk { inst.x } else { 0 };
                         self.pc = inst.nnn + self.v[v_src] as u16;
                     }
                     0xC => {
@@ -372,9 +383,9 @@ impl Chip8 {
                                     self.memory[self.i as usize + step] = self.v[step];
                                 }
                                 // Original Chip-8 incremented I, but modern don't update I
-                                // if !self.super_chip_support {
-                                //     self.i += inst.x as u16 + 1;
-                                // }
+                                if self.ld_quirk {
+                                    self.i += inst.x as u16 + 1;
+                                }
                             }
                             0x65 => {
                                 // Loads from memory variables into V0-VX
@@ -382,9 +393,9 @@ impl Chip8 {
                                     self.v[step] = self.memory[self.i as usize + step];
                                 }
                                 // Original Chip-8 incremented I, but modern don't update I
-                                // if !self.super_chip_support {
-                                //     self.i += inst.x as u16 + 1;
-                                // }
+                                if self.ld_quirk {
+                                    self.i += inst.x as u16 + 1;
+                                }
                             }
                             _ => { println!("Unknown opcode: {:04X}", inst.instruction); }
                         }
@@ -422,6 +433,10 @@ pub fn update_texture(canvas: &mut Canvas<Window>, texture: &mut Texture, displa
     canvas.present();
 }
 
+pub fn choose_game() {
+    
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let sdl = sdl2::init().unwrap();
     let video = sdl.video().unwrap();
@@ -437,14 +452,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .create_texture_streaming(PixelFormatEnum::RGB24, DISPLAY_WIDTH as u32, DISPLAY_HEIGHT as u32)
         .unwrap();
 
-    let mut chip8 = Chip8::new(false);
-
-    chip8.load_rom("roms/games/chip8-emulator-logo.ch8")?;
+    let mut chip8 = Chip8::new();
 
     let mut event_pump = sdl.event_pump().unwrap();
 
     let timer_interval = Duration::from_millis(16); // ~60Hz
-    let mut last_timer_tick = Instant::now();
+    let mut last_timer_tick = Instant::now();    
+
+    // GOTTEN FROM CHOOSING GAME
+    choose_game();
+
+    let filename = format!("{}{}{}", "roms/", "games/", "chip8-emulator-logo.ch8");
+    let load_store = false;
+    let shift = false;
+    let jump = false;
+
+    chip8.load_rom(&filename)?;
+
+    chip8.quirks(load_store, shift, jump);
 
     'running: loop {
         for event in event_pump.poll_iter() {
