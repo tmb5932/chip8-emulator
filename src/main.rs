@@ -50,6 +50,26 @@ pub fn map_keycode(key: Keycode) -> Option<usize> {
     }
 }
 
+struct Quirks {
+    load_store: bool,
+    shift: bool,
+    jump: bool,
+    vf_reset: bool,
+    clip: bool 
+}
+
+impl Quirks {
+    pub fn new(ld: bool, shift: bool, jump: bool, vf_reset: bool, clip: bool) -> Self {
+        Quirks {
+            load_store: ld,
+            shift: shift,
+            jump: jump,
+            vf_reset: vf_reset,
+            clip: clip 
+        }
+    }
+}
+
 struct Instruction {
     instruction: u16,
     nibble: u8,
@@ -91,16 +111,20 @@ struct Chip8 {
     sound_timer: u8,
     keypad: [bool; 16],
     draw_flag: bool,
+    wait_for_release: bool,
+    wait_key: usize,
     rng: ChaCha8Rng,
 
     // Quirks
-    shift_quirk: bool,
-    ld_quirk: bool,
-    jump_quirk: bool
+    quirks: Quirks,
+
+    // Debug
+    debug: bool,
+    paused: bool
 }
 
 impl Chip8 {
-    pub fn new() -> Self {
+    pub fn new(quirks: Quirks) -> Self {
         let mut chip8 = Chip8 {
             memory: [0; 4096],
             v: [0; 16],
@@ -113,10 +137,14 @@ impl Chip8 {
             sound_timer: 0,
             keypad: [false; 16],
             draw_flag: false,
+            wait_for_release: false,
+            wait_key: 0,
             rng: ChaCha8Rng::from_seed(Default::default()),
-            shift_quirk: false,
-            ld_quirk: false,
-            jump_quirk: false
+            quirks: quirks,
+
+            // Debug flags
+            debug: false,
+            paused: false
         };
 
         for (i, byte) in FONTSET.iter().enumerate() {
@@ -126,10 +154,20 @@ impl Chip8 {
         chip8
     }
 
-    pub fn quirks(&mut self, shift: bool, ld: bool, jump: bool) {
-        self.shift_quirk = shift;
-        self.ld_quirk = ld;
-        self.jump_quirk = jump;
+    pub fn debug_print(&mut self) {
+        println!("PC: 0x{:X}", self.pc);
+        let mut line: u8 = 0;
+        for register in 0..16 {
+            print!("v{:X}: 0x{:X}  \t", register, self.v[register]);
+            if line >= 4 {
+                print!("\r\n");
+                line = 0;
+            } else {
+                line += 1;
+            }
+        }
+
+        print!(" I: 0x{:X}\r\n\n", self.i)
     }
 
     pub fn load_rom(&mut self, filename: &str) -> std::io::Result<()> {
@@ -216,14 +254,23 @@ impl Chip8 {
                             0x1 => {
                                 // OR: VX = VX OR VY
                                 self.v[inst.x] = self.v[inst.x] | self.v[inst.y];
+                                if self.quirks.vf_reset {
+                                    self.v[0xF] = 0; 
+                                }
                             }
                             0x2 => {
                                 // AND: VX = VX AND VY
                                 self.v[inst.x] = self.v[inst.x] & self.v[inst.y];
+                                if self.quirks.vf_reset {
+                                    self.v[0xF] = 0; 
+                                }
                             }
                             0x3 => {
                                 // XOR: VX = VX XOR VY
                                 self.v[inst.x] = self.v[inst.x] ^ self.v[inst.y];
+                                if self.quirks.vf_reset {
+                                    self.v[0xF] = 0; 
+                                }
                             }
                             0x4 => {
                                 // ADD (with overflow): VX = VX + VY
@@ -238,11 +285,12 @@ impl Chip8 {
                                 self.v[0xF] = if borrowed { 0 } else { 1 };
                             }
                             0x6 => {
-                                // YSHIFT:    8XY6 VX = VY >> 1
-                                // No YSHIFT: 8XY6 VX = VX >> 1
-                                let shift_src = if self.shift_quirk { inst.x } else { inst.y };
-                                self.v[0xF] = self.v[shift_src] >> 7;
+                                // SHIFT QUIRK: 8XY6 VX = VY >> 1
+                                // No QUIRK:    8XY6 VX = VX >> 1
+                                let shift_src = if self.quirks.shift { inst.x } else { inst.y };
+                                let lsb: u8 = self.v[shift_src] & 0x1;
                                 self.v[inst.x] = self.v[shift_src] >> 1;
+                                self.v[0xF] = lsb;
                             }
                             0x7 => {
                                 // 8XY7 sets VX to the result of VY - VX.
@@ -253,9 +301,10 @@ impl Chip8 {
                             0xE => {
                                 // YSHIFT:    8XYE VX = VY << 1
                                 // No YSHIFT: 8XYE VX = VX << 1
-                                let shift_src = if self.shift_quirk { inst.x } else { inst.y };
-                                self.v[0xF] = self.v[shift_src] >> 7;
+                                let shift_src = if self.quirks.shift { inst.x } else { inst.y };
+                                let msb: u8 = (self.v[shift_src] >> 7) & 0x1;
                                 self.v[inst.x] = self.v[shift_src] << 1;
+                                self.v[0xF] = msb;
                             }
                             _ => { panic!("Unknown opcode: {:04X}", inst.instruction); }
                         }
@@ -278,7 +327,7 @@ impl Chip8 {
                     0xB => {
                         // CHIP-8:     0xBNNN Jump to NNN + V0
                         // SUPER-CHIP: 0xBXNN Jump to XNN + VX
-                        let v_src = if self.jump_quirk { inst.x } else { 0 };
+                        let v_src = if self.quirks.jump { inst.x } else { 0 };
                         self.pc = inst.nnn + self.v[v_src] as u16;
                     }
                     0xC => {
@@ -291,22 +340,43 @@ impl Chip8 {
                         let x_coord = self.v[inst.x] as usize % DISPLAY_WIDTH;
                         let y_coord = self.v[inst.y] as usize % DISPLAY_HEIGHT;
                         self.v[0xF] = 0; // Reset collision flag
+
                         for index in 0..inst.n as usize {
                             let sprite_byte = self.memory[self.i as usize + index];
                             
+                                    // Y-coordinate handling
+                            let pixel_y = y_coord + index;
+                            if self.quirks.clip && pixel_y >= DISPLAY_HEIGHT {
+                                continue; // skip drawing if clipped vertically
+                            }
+
                             for bit_index in 0..8 {
-                                let pixel_x = (x_coord + bit_index) % 64;
-                                let pixel_y = (y_coord + index) % 32;
-                        
+                                let pixel_x = x_coord + bit_index;
+                                if self.quirks.clip && pixel_x >= DISPLAY_WIDTH {
+                                    continue; // skip drawing if clipped horizontally
+                                }
+                    
+                                // Apply wrapping if clipping is off
+                                let px = if self.quirks.clip {
+                                    pixel_x
+                                } else {
+                                    pixel_x % DISPLAY_WIDTH
+                                };
+                                let py = if self.quirks.clip {
+                                    pixel_y
+                                } else {
+                                    pixel_y % DISPLAY_HEIGHT
+                                };
+                                            
                                 let sprite_pixel_on = (sprite_byte >> (7 - bit_index)) & 1 == 1;
-                                let current_pixel = self.display[pixel_y][pixel_x];
+                                let current_pixel = self.display[py][px];
                         
                                 if sprite_pixel_on {
                                     if current_pixel {
                                         self.v[0xF] = 1; // Collision
                                     }
                         
-                                    self.display[pixel_y][pixel_x] ^= true;
+                                    self.display[py][px] ^= true;
                                 }
                             }
                         }
@@ -338,16 +408,16 @@ impl Chip8 {
                                 self.v[inst.x] = self.delay_timer;
                             }
                             0x0A => {
-                                // Wait til any button is pressed
-                                let mut key_pressed: bool = false;
+                                // Wait til any button is pressed and also released
                                 for (i, &pressed) in self.keypad.iter().enumerate() {
                                     if pressed {
-                                        self.v[inst.x] = i as u8;
-                                        key_pressed = true;
+                                        self.wait_for_release = true;
+                                        self.wait_key = i;
+                                        self.v[inst.x] = self.wait_key as u8;
                                         break;
                                     }
                                 }
-                                if !key_pressed {
+                                if !self.wait_for_release || self.keypad[self.wait_key]{
                                     // Don't advance to next instruction
                                     self.pc -= 2;
                                 }
@@ -383,7 +453,7 @@ impl Chip8 {
                                     self.memory[self.i as usize + step] = self.v[step];
                                 }
                                 // Original Chip-8 incremented I, but modern don't update I
-                                if self.ld_quirk {
+                                if self.quirks.load_store {
                                     self.i += inst.x as u16 + 1;
                                 }
                             }
@@ -393,7 +463,7 @@ impl Chip8 {
                                     self.v[step] = self.memory[self.i as usize + step];
                                 }
                                 // Original Chip-8 incremented I, but modern don't update I
-                                if self.ld_quirk {
+                                if self.quirks.load_store {
                                     self.i += inst.x as u16 + 1;
                                 }
                             }
@@ -411,73 +481,145 @@ impl Chip8 {
         // Fetch
         let instruction: Instruction = self.fetch();
         
+        if self.debug {
+            print!("Instruction: 0x{:04X}\t", instruction.instruction);
+            self.debug_print();            
+        }
+
         // Decode/Execute
-        self.execute(instruction)
+        let result = self.execute(instruction);
+
+        if self.debug {
+            self.paused = true;
+        }
+        
+        result
     }
 }
 
-pub fn update_texture(canvas: &mut Canvas<Window>, texture: &mut Texture, display: [[bool; DISPLAY_WIDTH]; DISPLAY_HEIGHT]) {
-    texture.with_lock(None, |buffer: &mut [u8], pitch: usize| {
-        for y in 0..DISPLAY_HEIGHT {
-            for x in 0..DISPLAY_WIDTH {
-                let i = y * pitch + x * 3;
-                let pixel = if display[y][x] { 255 } else { 0 };
-                buffer[i] = pixel;     // R
-                buffer[i + 1] = pixel; // G
-                buffer[i + 2] = pixel; // B
-            }
-        }
-    }).unwrap();
+pub fn update_texture(
+    canvas: &mut Canvas<Window>,
+    texture: &mut Texture,
+    display: [[bool; DISPLAY_WIDTH]; DISPLAY_HEIGHT],
+) {
+    texture
+        .with_lock(None, |buffer: &mut [u8], pitch: usize| {
+            for y in 0..DISPLAY_HEIGHT {
+                for x in 0..DISPLAY_WIDTH {
+                    let offset = y * pitch + x * 4;
+                    let color = if display[y][x] { 0xFF } else { 0x00 };
 
-    canvas.copy(&texture, None, None).unwrap();
+                    buffer[offset] = color;     // R
+                    buffer[offset + 1] = color; // G
+                    buffer[offset + 2] = color; // B
+                    buffer[offset + 3] = 0xFF;  // A
+                }
+            }
+        })
+        .unwrap();
+
+    canvas.clear();
+    canvas.copy(texture, None, None).unwrap();
     canvas.present();
 }
 
-pub fn choose_game() {
+// pub fn choose_rom(video: &sdl2::VideoSubsystem, event_pump: &mut sdl2::EventPump) -> String {
+//     let window = video.window("Game Menu", 640, 320)
+//     .position_centered()
+//     .opengl()
+//     .build()
+//     .unwrap();
+
+//     let mut canvas = window.into_canvas().build().unwrap();
+//     // Example rendering or input loop
+//     let roms = vec!["pong.ch8", "tetris.ch8", "space.ch8"];
+//     let mut selected = 0;
     
-}
+//     let ttf_context = sdl2::ttf::init().unwrap();
+//     let font = ttf_context.load_font("path/to/font.ttf", 24).unwrap();
+    
+//     let surface = font.render("My ROM")
+//                       .blended(Color::WHITE)
+//                       .unwrap();
+    
+//     let texture_creator = canvas.texture_creator();
+//     let texture = texture_creator.create_texture_from_surface(&surface).unwrap();
+//     let target = sdl2::rect::Rect::new(10, 10, surface.width(), surface.height());
+    
+//     canvas.copy(&texture, None, Some(target)).unwrap();
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let sdl = sdl2::init().unwrap();
-    let video = sdl.video().unwrap();
 
+//     'menu: loop {
+//         for event in event_pump.poll_iter() {
+//             match event {
+//                 sdl2::event::Event::Quit { .. } => std::process::exit(0),
+//                 sdl2::event::Event::KeyDown { keycode: Some(kc), .. } => match kc {
+//                     sdl2::keyboard::Keycode::Down => selected = (selected + 1) % roms.len(),
+//                     sdl2::keyboard::Keycode::Up => {
+//                         selected = if selected == 0 { roms.len() - 1 } else { selected - 1 }
+//                     }
+//                     sdl2::keyboard::Keycode::Return => break 'menu,
+//                     _ => {}
+//                 },
+//                 _ => {}
+//             }
+//         }
+
+//         // Drawing menu (clear + highlight selected)
+//         canvas.set_draw_color(sdl2::pixels::Color::BLACK);
+//         canvas.clear();
+//         // ... draw the menu text using sdl2_ttf or simple rectangles as a placeholder ...
+//         canvas.present();
+
+//         std::thread::sleep(std::time::Duration::from_millis(100));
+//     }
+
+//     roms[selected].to_string()
+// }
+
+fn run_game(video: &sdl2::VideoSubsystem, event_pump: &mut sdl2::EventPump, rom: String, quirks: Quirks, debug: bool) -> Result<(), Box<dyn std::error::Error>> {
+    // Build canvas, texture, load ROM into chip8, start game loop
     let window = video.window("CHIP-8", DISPLAY_WIDTH as u32 * SCALE, DISPLAY_HEIGHT as u32 * SCALE)
-        .position_centered()
-        .build()
-        .unwrap();
+    .position_centered()
+    .opengl()
+    .build()
+    .unwrap();
 
-    let mut canvas = window.into_canvas().present_vsync().build().unwrap();
+    let mut canvas = window.into_canvas().build().unwrap();
     let texture_creator = canvas.texture_creator();
+
     let mut texture = texture_creator
-        .create_texture_streaming(PixelFormatEnum::RGB24, DISPLAY_WIDTH as u32, DISPLAY_HEIGHT as u32)
-        .unwrap();
-
-    let mut chip8 = Chip8::new();
-
-    let mut event_pump = sdl.event_pump().unwrap();
+    .create_texture_streaming(PixelFormatEnum::RGBA8888, DISPLAY_WIDTH as u32, DISPLAY_HEIGHT as u32)
+    .unwrap();
 
     let timer_interval = Duration::from_millis(16); // ~60Hz
     let mut last_timer_tick = Instant::now();    
 
-    // GOTTEN FROM CHOOSING GAME
-    choose_game();
+    let mut chip8 = Chip8::new(quirks);
 
-    let filename = format!("{}{}{}", "roms/", "games/", "chip8-emulator-logo.ch8");
-    let load_store = false;
-    let shift = false;
-    let jump = false;
+    chip8.load_rom(&rom)?;
 
-    chip8.load_rom(&filename)?;
-
-    chip8.quirks(load_store, shift, jump);
+    chip8.debug = debug;
 
     'running: loop {
         for event in event_pump.poll_iter() {
             match event {
                 Event::Quit { .. } => break 'running,
                 Event::KeyDown { keycode: Some(key), .. } => {
-                    if let Some(index) = map_keycode(key) {
-                        chip8.keypad[index] = true;
+                    match key {
+                        // Step one instruction when in debug mode
+                        Keycode::Space => {
+                            if chip8.debug {
+                                chip8.paused = false;
+                            }
+                        }
+        
+                        // Normal key mapping
+                        _ => {
+                            if let Some(index) = map_keycode(key) {
+                                chip8.keypad[index] = true;
+                            }
+                        }
                     }
                 }
                 Event::KeyUp { keycode: Some(key), .. } => {
@@ -498,14 +640,41 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             last_timer_tick = Instant::now();
         }
 
-        chip8.cycle().unwrap();
+        if !chip8.debug || (chip8.debug &&!chip8.paused) {
+            chip8.cycle().unwrap();
+        }
 
         if chip8.draw_flag {
             chip8.draw_flag = false;
 
             update_texture(&mut canvas, &mut texture, chip8.display);
         }
-    }
+    };
+
+    Ok(())
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let sdl = sdl2::init().unwrap();
+    let video = sdl.video().unwrap();
+
+    let mut event_pump: sdl2::EventPump = sdl.event_pump().unwrap();
+
+    // GOTTEN FROM CHOOSING GAME
+    // let selected_rom = choose_rom(&video, &mut event_pump);
+
+    // let filename = format!("{}{}", "roms/", selected_rom);
+    let filename = format!("{}{}", "roms/", "tests/tim/6-keypad.ch8");
+    let load_store = true;
+    let clip = true;
+    let vf_reset = true;
+    let shift = false;
+    let jump = false;
+    let quirks = Quirks::new(load_store, shift, jump, vf_reset, clip);
+
+    let debug = false;
+
+    run_game(&video, &mut event_pump, filename, quirks, debug)?;
 
     Ok(())
 }
