@@ -2,12 +2,34 @@ use rand::{RngCore, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 use sdl2::{event::Event, keyboard::Keycode, pixels::PixelFormatEnum, render::{Canvas, Texture}, video::Window};
 use std::time::{Duration, Instant};
+use sdl2::audio::{AudioCallback, AudioSpecDesired};
 
 const DISPLAY_WIDTH: usize = 64;
 const DISPLAY_HEIGHT: usize = 32;
 const SCALE: u32 = 10;
 const FONTSET_START: usize = 0x50;
 const ROM_START: usize = 0x200;
+
+struct SquareWave {
+    phase_inc: f32,
+    phase: f32,
+    volume: f32,
+}
+
+impl AudioCallback for SquareWave {
+    type Channel = f32;
+
+    fn callback(&mut self, out: &mut [f32]) {
+        for x in out.iter_mut() {
+            *x = if self.phase <= 0.5 {
+                self.volume
+            } else {
+                -self.volume
+            };
+            self.phase = (self.phase + self.phase_inc) % 1.0;
+        }
+    }
+}
 
 const FONTSET: [u8; 80] = [
     0xF0, 0x90, 0x90, 0x90, 0xF0, // 0
@@ -577,7 +599,7 @@ pub fn update_texture(
 //     roms[selected].to_string()
 // }
 
-fn run_game(video: &sdl2::VideoSubsystem, event_pump: &mut sdl2::EventPump, rom: String, quirks: Quirks, debug: bool) -> Result<(), Box<dyn std::error::Error>> {
+fn run_game(video: &sdl2::VideoSubsystem, audio: &sdl2::AudioSubsystem, event_pump: &mut sdl2::EventPump, rom: String, quirks: Quirks, debug: bool) -> Result<(), Box<dyn std::error::Error>> {
     // Build canvas, texture, load ROM into chip8, start game loop
     let window = video.window("CHIP-8", DISPLAY_WIDTH as u32 * SCALE, DISPLAY_HEIGHT as u32 * SCALE)
     .position_centered()
@@ -592,6 +614,22 @@ fn run_game(video: &sdl2::VideoSubsystem, event_pump: &mut sdl2::EventPump, rom:
     .create_texture_streaming(PixelFormatEnum::RGBA8888, DISPLAY_WIDTH as u32, DISPLAY_HEIGHT as u32)
     .unwrap();
 
+    let desired_spec = AudioSpecDesired {
+        freq: Some(44100),
+        channels: Some(1),  // mono
+        samples: Some(512),
+    };
+    
+    let audio_device = audio.open_playback(None, &desired_spec, |spec| {
+        SquareWave {
+            phase_inc: 440.0 / spec.freq as f32, // 440 Hz tone
+            phase: 0.0,
+            volume: 0.25,
+        }
+    }).unwrap();
+    
+    audio_device.pause(); // Start paused
+
     let timer_interval = Duration::from_millis(16); // ~60Hz
     let mut last_timer_tick = Instant::now();    
 
@@ -601,7 +639,12 @@ fn run_game(video: &sdl2::VideoSubsystem, event_pump: &mut sdl2::EventPump, rom:
 
     chip8.debug = debug;
 
+    let frame_duration = std::time::Duration::from_micros(2_000); 
+
     'running: loop {
+        let frame_start = Instant::now();
+
+        // Handle keyboard
         for event in event_pump.poll_iter() {
             match event {
                 Event::Quit { .. } => break 'running,
@@ -630,24 +673,38 @@ fn run_game(video: &sdl2::VideoSubsystem, event_pump: &mut sdl2::EventPump, rom:
                 _ => {}
             }
         }
+
+        // Timers
         if last_timer_tick.elapsed() >= timer_interval {
             if chip8.delay_timer > 0 {
                 chip8.delay_timer -= 1;
             }
             if chip8.sound_timer > 0 {
+                audio_device.resume();
                 chip8.sound_timer -= 1;
+            } else {
+                audio_device.pause();
             }
             last_timer_tick = Instant::now();
         }
 
+        // Run Cycle 
         if !chip8.debug || (chip8.debug &&!chip8.paused) {
             chip8.cycle().unwrap();
         }
 
+        // Update Display
         if chip8.draw_flag {
             chip8.draw_flag = false;
 
             update_texture(&mut canvas, &mut texture, chip8.display);
+        }
+
+        //  Frame rate limiting
+        let elapsed = frame_start.elapsed();
+        if elapsed < frame_duration {
+            let delay = frame_duration - elapsed;
+            std::thread::sleep(delay);
         }
     };
 
@@ -657,6 +714,7 @@ fn run_game(video: &sdl2::VideoSubsystem, event_pump: &mut sdl2::EventPump, rom:
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let sdl = sdl2::init().unwrap();
     let video = sdl.video().unwrap();
+    let audio = sdl.audio().unwrap();
 
     let mut event_pump: sdl2::EventPump = sdl.event_pump().unwrap();
 
@@ -664,7 +722,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // let selected_rom = choose_rom(&video, &mut event_pump);
 
     // let filename = format!("{}{}", "roms/", selected_rom);
-    let filename = format!("{}{}", "roms/", "tests/tim/6-keypad.ch8");
+    let filename = format!("{}{}", "roms/", "tests/zero-demo.ch8");
     let load_store = true;
     let clip = true;
     let vf_reset = true;
@@ -674,7 +732,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let debug = false;
 
-    run_game(&video, &mut event_pump, filename, quirks, debug)?;
+    run_game(&video, &audio, &mut event_pump, filename, quirks, debug)?;
 
     Ok(())
 }
