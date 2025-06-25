@@ -430,18 +430,23 @@ impl Chip8 {
                                 self.v[inst.x] = self.delay_timer;
                             }
                             0x0A => {
-                                // Wait til any button is pressed and also released
-                                for (i, &pressed) in self.keypad.iter().enumerate() {
-                                    if pressed {
-                                        self.wait_for_release = true;
-                                        self.wait_key = i;
-                                        self.v[inst.x] = self.wait_key as u8;
-                                        break;
+                                if !self.wait_for_release { // If not actively waiting for key release
+                                    // Check if any button is pressed
+                                    for (i, &pressed) in self.keypad.iter().enumerate() {
+                                        if pressed {
+                                            self.wait_for_release = true;
+                                            self.wait_key = i;
+                                            break;
+                                        }
                                     }
-                                }
-                                if !self.wait_for_release || self.keypad[self.wait_key]{
+                                } 
+                                // If waiting for initial key press or key release
+                                if !self.wait_for_release || (self.wait_for_release && self.keypad[self.wait_key]) {
                                     // Don't advance to next instruction
                                     self.pc -= 2;
+                                } else { // The key was let go
+                                    self.v[inst.x] = self.wait_key as u8;
+                                    self.wait_for_release = false;
                                 }
                             }
                             0x15 => {
@@ -545,62 +550,73 @@ pub fn update_texture(
     canvas.present();
 }
 
-// pub fn choose_rom(video: &sdl2::VideoSubsystem, event_pump: &mut sdl2::EventPump) -> String {
-//     let window = video.window("Game Menu", 640, 320)
-//     .position_centered()
-//     .opengl()
-//     .build()
-//     .unwrap();
+pub fn choose_rom(video: &sdl2::VideoSubsystem, event_pump: &mut sdl2::EventPump) -> u8 {
+    let window = video.window("CHIP-8", DISPLAY_WIDTH as u32 * SCALE, DISPLAY_HEIGHT as u32 * SCALE)
+    .position_centered()
+    .opengl()
+    .build()
+    .unwrap();
 
-//     let mut canvas = window.into_canvas().build().unwrap();
-//     // Example rendering or input loop
-//     let roms = vec!["pong.ch8", "tetris.ch8", "space.ch8"];
-//     let mut selected = 0;
-    
-//     let ttf_context = sdl2::ttf::init().unwrap();
-//     let font = ttf_context.load_font("path/to/font.ttf", 24).unwrap();
-    
-//     let surface = font.render("My ROM")
-//                       .blended(Color::WHITE)
-//                       .unwrap();
-    
-//     let texture_creator = canvas.texture_creator();
-//     let texture = texture_creator.create_texture_from_surface(&surface).unwrap();
-//     let target = sdl2::rect::Rect::new(10, 10, surface.width(), surface.height());
-    
-//     canvas.copy(&texture, None, Some(target)).unwrap();
+    let mut canvas = window.into_canvas().build().unwrap();
+    let texture_creator = canvas.texture_creator();
 
+    let mut texture = texture_creator
+    .create_texture_streaming(PixelFormatEnum::RGBA8888, DISPLAY_WIDTH as u32, DISPLAY_HEIGHT as u32)
+    .unwrap();
 
-//     'menu: loop {
-//         for event in event_pump.poll_iter() {
-//             match event {
-//                 sdl2::event::Event::Quit { .. } => std::process::exit(0),
-//                 sdl2::event::Event::KeyDown { keycode: Some(kc), .. } => match kc {
-//                     sdl2::keyboard::Keycode::Down => selected = (selected + 1) % roms.len(),
-//                     sdl2::keyboard::Keycode::Up => {
-//                         selected = if selected == 0 { roms.len() - 1 } else { selected - 1 }
-//                     }
-//                     sdl2::keyboard::Keycode::Return => break 'menu,
-//                     _ => {}
-//                 },
-//                 _ => {}
-//             }
-//         }
+    let mut chip8 = Chip8::new(Quirks::new(false, false, false, false, false));
 
-//         // Drawing menu (clear + highlight selected)
-//         canvas.set_draw_color(sdl2::pixels::Color::BLACK);
-//         canvas.clear();
-//         // ... draw the menu text using sdl2_ttf or simple rectangles as a placeholder ...
-//         canvas.present();
+    chip8.load_rom("roms/game_menu.ch8").unwrap();
 
-//         std::thread::sleep(std::time::Duration::from_millis(100));
-//     }
+    'menu: loop {
+        // Handle keyboard
+        for event in event_pump.poll_iter() {
+            match event {
+                Event::Quit { .. } => break 'menu,
+                Event::KeyDown { keycode: Some(key), .. } => {
+                    match key {
+                        // Step one instruction when in debug mode
+                        Keycode::Space => {
+                            if chip8.debug {
+                                chip8.paused = false;
+                            }
+                        }
+        
+                        // Normal key mapping
+                        _ => {
+                            if let Some(index) = map_keycode(key) {
+                                chip8.keypad[index] = true;
+                            }
+                        }
+                    }
+                }
+                Event::KeyUp { keycode: Some(key), .. } => {
+                    if let Some(index) = map_keycode(key) {
+                        chip8.keypad[index] = false;
+                    }
+                }
+                _ => {}
+            }
+        }
 
-//     roms[selected].to_string()
-// }
+        // Run Cycle 
+        if !chip8.debug || (chip8.debug &&!chip8.paused) {
+            chip8.cycle().unwrap();
+        }
+
+        // Update Display
+        if chip8.draw_flag {
+            chip8.draw_flag = false;
+
+            update_texture(&mut canvas, &mut texture, chip8.display);
+        }
+    };
+
+    chip8.v[0] // Return the ID of the game selected
+}
 
 fn run_game(video: &sdl2::VideoSubsystem, audio: &sdl2::AudioSubsystem, event_pump: &mut sdl2::EventPump, rom: String, quirks: Quirks, debug: bool) -> Result<(), Box<dyn std::error::Error>> {
-    // Build canvas, texture, load ROM into chip8, start game loop
+    // Build canvas, texture, audio, load ROM into chip8, start game loop
     let window = video.window("CHIP-8", DISPLAY_WIDTH as u32 * SCALE, DISPLAY_HEIGHT as u32 * SCALE)
     .position_centered()
     .opengl()
@@ -630,7 +646,7 @@ fn run_game(video: &sdl2::VideoSubsystem, audio: &sdl2::AudioSubsystem, event_pu
     
     audio_device.pause(); // Start paused
 
-    let timer_interval = Duration::from_millis(16); // ~60Hz
+    let timer_interval = Duration::from_millis(16);
     let mut last_timer_tick = Instant::now();    
 
     let mut chip8 = Chip8::new(quirks);
@@ -639,7 +655,7 @@ fn run_game(video: &sdl2::VideoSubsystem, audio: &sdl2::AudioSubsystem, event_pu
 
     chip8.debug = debug;
 
-    let frame_duration = std::time::Duration::from_micros(2_000); 
+    let frame_duration = std::time::Duration::from_micros(00); // 2_000 is roughly 60hz? But slow for keypress 
 
     'running: loop {
         let frame_start = Instant::now();
@@ -711,6 +727,12 @@ fn run_game(video: &sdl2::VideoSubsystem, audio: &sdl2::AudioSubsystem, event_pu
     Ok(())
 }
 
+pub fn get_filename_from_id(id: u8) -> &'static str {
+    let _ = id;
+    let filename = "tests/zero-demo.ch8";
+    filename
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let sdl = sdl2::init().unwrap();
     let video = sdl.video().unwrap();
@@ -719,10 +741,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut event_pump: sdl2::EventPump = sdl.event_pump().unwrap();
 
     // GOTTEN FROM CHOOSING GAME
-    // let selected_rom = choose_rom(&video, &mut event_pump);
+    let id = choose_rom(&video, &mut event_pump);
 
-    // let filename = format!("{}{}", "roms/", selected_rom);
-    let filename = format!("{}{}", "roms/", "tests/zero-demo.ch8");
+    let filename = get_filename_from_id(id);
+    let filename = format!("{}{}", "roms/", filename);
     let load_store = true;
     let clip = true;
     let vf_reset = true;
