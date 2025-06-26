@@ -566,7 +566,7 @@ pub fn choose_rom(video: &sdl2::VideoSubsystem, event_pump: &mut sdl2::EventPump
 
     let mut chip8 = Chip8::new(Quirks::new(false, false, false, false, false));
 
-    chip8.load_rom("roms/game_menu.ch8").unwrap();
+    chip8.load_rom("roms/menu-temp.ch8").unwrap();
 
     'menu: loop {
         // Handle keyboard
