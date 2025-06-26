@@ -524,7 +524,7 @@ impl Chip8 {
     }
 }
 
-pub fn update_texture(
+pub fn update_display(
     canvas: &mut Canvas<Window>,
     texture: &mut Texture,
     display: [[bool; DISPLAY_WIDTH]; DISPLAY_HEIGHT],
@@ -548,71 +548,6 @@ pub fn update_texture(
     canvas.clear();
     canvas.copy(texture, None, None).unwrap();
     canvas.present();
-}
-
-pub fn choose_rom(video: &sdl2::VideoSubsystem, event_pump: &mut sdl2::EventPump) -> u8 {
-    let window = video.window("CHIP-8", DISPLAY_WIDTH as u32 * SCALE, DISPLAY_HEIGHT as u32 * SCALE)
-    .position_centered()
-    .opengl()
-    .build()
-    .unwrap();
-
-    let mut canvas = window.into_canvas().build().unwrap();
-    let texture_creator = canvas.texture_creator();
-
-    let mut texture = texture_creator
-    .create_texture_streaming(PixelFormatEnum::RGBA8888, DISPLAY_WIDTH as u32, DISPLAY_HEIGHT as u32)
-    .unwrap();
-
-    let mut chip8 = Chip8::new(Quirks::new(false, false, false, false, false));
-
-    chip8.load_rom("roms/game_menu.ch8").unwrap();
-
-    'menu: loop {
-        // Handle keyboard
-        for event in event_pump.poll_iter() {
-            match event {
-                Event::Quit { .. } => break 'menu,
-                Event::KeyDown { keycode: Some(key), .. } => {
-                    match key {
-                        // Step one instruction when in debug mode
-                        Keycode::Space => {
-                            if chip8.debug {
-                                chip8.paused = false;
-                            }
-                        }
-        
-                        // Normal key mapping
-                        _ => {
-                            if let Some(index) = map_keycode(key) {
-                                chip8.keypad[index] = true;
-                            }
-                        }
-                    }
-                }
-                Event::KeyUp { keycode: Some(key), .. } => {
-                    if let Some(index) = map_keycode(key) {
-                        chip8.keypad[index] = false;
-                    }
-                }
-                _ => {}
-            }
-        }
-
-        // Run Cycle 
-        if !chip8.debug || (chip8.debug &&!chip8.paused) {
-            chip8.cycle().unwrap();
-        }
-
-        // Update Display
-        if chip8.draw_flag {
-            chip8.draw_flag = false;
-
-            update_texture(&mut canvas, &mut texture, chip8.display);
-        }
-    };
-
-    chip8.v[0] // Return the ID of the game selected
 }
 
 fn run_game(video: &sdl2::VideoSubsystem, audio: &sdl2::AudioSubsystem, event_pump: &mut sdl2::EventPump, rom: String, quirks: Quirks, debug: bool) -> Result<(), Box<dyn std::error::Error>> {
@@ -713,7 +648,7 @@ fn run_game(video: &sdl2::VideoSubsystem, audio: &sdl2::AudioSubsystem, event_pu
         if chip8.draw_flag {
             chip8.draw_flag = false;
 
-            update_texture(&mut canvas, &mut texture, chip8.display);
+            update_display(&mut canvas, &mut texture, chip8.display);
         }
 
         //  Frame rate limiting
@@ -727,12 +662,6 @@ fn run_game(video: &sdl2::VideoSubsystem, audio: &sdl2::AudioSubsystem, event_pu
     Ok(())
 }
 
-pub fn get_filename_from_id(id: u8) -> &'static str {
-    let _ = id;
-    let filename = "tests/zero-demo.ch8";
-    filename
-}
-
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let sdl = sdl2::init().unwrap();
     let video = sdl.video().unwrap();
@@ -740,11 +669,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut event_pump: sdl2::EventPump = sdl.event_pump().unwrap();
 
-    // GOTTEN FROM CHOOSING GAME
-    let id = choose_rom(&video, &mut event_pump);
-
-    let filename = get_filename_from_id(id);
-    let filename = format!("{}{}", "roms/", filename);
+    let filename = "roms/tests/delay-timer-test.ch8";
     let load_store = true;
     let clip = true;
     let vf_reset = true;
@@ -754,7 +679,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let debug = false;
 
-    run_game(&video, &audio, &mut event_pump, filename, quirks, debug)?;
+    run_game(&video, &audio, &mut event_pump, filename.to_string(), quirks, debug)?;
 
     Ok(())
 }
