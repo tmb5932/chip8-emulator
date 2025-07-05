@@ -1,0 +1,186 @@
+15 PUZZLE
+15-puzzle.ch8
+ADD PROBS
+addition-problems.ch8
+AIRPLANE
+airplane.ch8
+ANIMAL RACE
+animal-race.ch8
+ASTRO DODGE
+astro-dodge.ch8
+BIORHYTHM
+biorhythm.ch8
+BLINKY
+blinky.ch8
+BLITZ
+blitz.ch8
+BMP VIEWER
+bmp-viewer-hello.ch8
+BOWLING
+bowling.ch8
+BREAKOUT
+breakout.ch8
+BRICK
+brick.ch8
+BRIX
+brix.ch8
+CAVE
+cave.ch8
+CLOCK
+clock-program.ch8
+COIN FLIPS
+coin-flipping.ch8
+CONNECT 4
+connect-4.ch8
+CRAPS
+craps.ch8
+DEFLECTION
+deflection.ch8
+FIGURES
+figures.ch8
+FILTER
+filter.ch8
+FISHIE
+fishie.ch8
+FRAMED MK1
+framed-mk1.ch8
+FRAMED MK2
+framed-mk2.ch8
+GUESS
+guess.ch8
+HIDDEN
+hidden.ch8
+HI-LO
+hi-lo.ch8
+IBM LOGO
+ibm-logo.ch8
+JUMPING XO
+jumping-x-and-o.ch8
+KALEIDOSC..
+kaleidoscope.ch8
+LANDING
+landing.ch8
+LIFE
+life.ch8
+LUNAR LAND
+lunar-lander.ch8
+MASTERMIND
+mastermind-fourrow.ch8
+MAZE DEMO
+maze.ch8
+MERLIN
+merlin.ch8
+MINIMAL
+minimal-game.ch8
+MISSILE
+missile.ch8
+MOST DANGER
+most-dangerous-game.ch8
+NIM
+nim.ch8
+PADDLES
+paddles.ch8
+PARTIC DEMO
+particle-demo.ch8
+PONG
+pong.ch8
+PONG 2
+pong-2.ch8
+PONG 1plyr
+pong-1-player.ch8
+PUZZLE
+puzzle.ch8
+REVERSI
+reversi.ch8
+ROCKET
+rocket.ch8
+R LAUNCHER
+rocket-launcher.ch8
+R LAUNCH
+rocket-launch.ch8
+RUSH HOUR
+rush-hour.ch8
+RUSS ROULET
+russian-roulette.ch8
+SEQ SHOOT!
+sequence-shoot.ch8
+SHOOTINSTAR
+shooting-stars.ch8
+SIERPINSKI
+sierpinski.ch8
+SLIDE
+slide.ch8
+SOCCER
+soccor.ch8
+SPACEFLIGHT
+space-flight.ch8
+SPACFIGHTER
+programmable-spacefighters.ch8
+INTERCEPTOR
+space-intercept.ch8
+SPAC-INVADE
+space-invaders.ch8
+SPOOKY SPOT
+spooky-spot.ch8
+SQUASH
+squash.ch8
+STARS DEMO
+stars.ch8
+SUBMARINE
+submarine.ch8
+SUM FUN
+sum-fun.ch8
+SUPERWORMV4
+worm-v4.ch8
+SYZYGY
+syzygy.ch8
+TANK
+tank.ch8
+TAPEWORM
+tapeworm.ch8
+TETRIS
+tetris.ch8
+TIC-TAC-TOE
+tic-tac-toe.ch8
+TIMEBOMB
+timebomb.ch8
+TRIP8 DEMO
+trip8-demo.ch8
+TRON
+tron.ch8
+UFO
+ufo.ch8
+VERS
+vers.ch8
+VERT BRIX
+vertical-brix.ch8
+WALL
+wall.ch8
+WIPE OFF
+wipe-off.ch8
+X-MIRROR
+x-mirror.ch8
+ZERO PONG
+zeropong.ch8
+CHIP8 LOGO
+1-chip8-logo.ch8
+IBM LOGO
+2-ibm-logo.ch8
+CORAX+
+3-corax+.ch8
+FLAG TEST
+4-flags.ch8
+QUIRKS TEST
+5-quirks.ch8
+KEYPAD TEST
+6-keypad.ch8
+SOUND TEST
+7-beep.ch8
+DELAY TEST
+delay-timer-test.ch8
+RANDNUM TST
+random-number-test.ch8
+TEST OPCODE
+test-opcode.ch8
+ZERO
+zero-demo.ch8
