@@ -1,7 +1,7 @@
 use rand::{RngCore, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 use sdl2::{event::Event, keyboard::Keycode, pixels::PixelFormatEnum, render::{Canvas, Texture}, video::Window};
-use std::time::{Duration, Instant};
+use std::{fs::File, io::{self, BufRead}, time::{Duration, Instant}};
 use sdl2::audio::{AudioCallback, AudioSpecDesired};
 
 // SDL2 Display Constants
@@ -88,13 +88,13 @@ struct Quirks {
 }
 
 impl Quirks {
-    pub fn new(ld: bool, shift: bool, jump: bool, vf_reset: bool, clip: bool) -> Self {
+    pub fn new(ld: Option<bool>, shift: Option<bool>, jump: Option<bool>, vf_reset: Option<bool>, clip: Option<bool>) -> Self {
         Quirks {
-            load_store: ld,
-            shift: shift,
-            jump: jump,
-            vf_reset: vf_reset,
-            clip: clip 
+            load_store: ld.unwrap_or(true),
+            shift: shift.unwrap_or(false),
+            jump: jump.unwrap_or(false),
+            vf_reset: vf_reset.unwrap_or(true),
+            clip: clip.unwrap_or(true) 
         }
     }
 }
@@ -561,7 +561,7 @@ pub fn update_texture(
     canvas.present();
 }
 
-fn run_emulator(video: &sdl2::VideoSubsystem, audio: &sdl2::AudioSubsystem, event_pump: &mut sdl2::EventPump, rom: String, quirks: Quirks, debug: bool) -> Result<u8, Box<dyn std::error::Error>> {
+fn run_emulator(video: &sdl2::VideoSubsystem, audio: &sdl2::AudioSubsystem, event_pump: &mut sdl2::EventPump, chip8: &mut Chip8) -> Result<u8, Box<dyn std::error::Error>> {
     // Build canvas, texture, audio, load ROM into chip8, start game loop
     let window = video.window("CHIP-8", DISPLAY_WIDTH as u32 * SCALE, DISPLAY_HEIGHT as u32 * SCALE)
     .position_centered()
@@ -594,12 +594,6 @@ fn run_emulator(video: &sdl2::VideoSubsystem, audio: &sdl2::AudioSubsystem, even
 
     let timer_interval = Duration::from_millis(16);
     let mut last_timer_tick = Instant::now();    
-
-    let mut chip8 = Chip8::new(quirks);
-
-    chip8.load_rom(&rom)?;
-
-    chip8.debug = debug;
 
     let frame_duration = std::time::Duration::from_micros(00); // 2_000 is roughly 60hz? But slow for keypress 
 
@@ -674,13 +668,38 @@ fn run_emulator(video: &sdl2::VideoSubsystem, audio: &sdl2::AudioSubsystem, even
         }
     };
 
-    Ok(chip8.v[0])  // Return the ID of the game selected (for when it is the selection menu)
+    Ok(chip8.v[1])  // Return the ID of the game selected (for when it is the selection menu)
 }
 
-pub fn get_filename_from_id(id: u8) -> &'static str {
-    let _ = id;
-    let filename = "tests/zero-demo.ch8";
-    filename
+fn load_chip8_memory(chip8: &mut Chip8, path: String, start_location: usize) -> (&mut Chip8, Vec<String>) {
+    // Open file
+    let file = File::open(path).unwrap();
+    let reader = io::BufReader::new(file);
+
+    // For title in file
+    let mut i: u8 = 0;
+    let mut offset: usize = 0;
+    let mut files: Vec<String> = Vec::new();
+    for line_result in reader.lines() {
+        i += 1;
+        let line = line_result.unwrap();
+        let trimmed = line.trim();
+        if i % 2 == 0 {
+            files.push(trimmed.to_owned()); // Add file names to file vector
+            continue;
+        }
+        
+        let padded = format!("{:<11}", trimmed);
+        
+        // Add to chip8 memory
+        for ch in padded.chars() {
+            let ascii_value = ch as u8;
+            chip8.memory[start_location + offset as usize] = ascii_value;
+            offset += 1;
+        }
+    }
+
+    (chip8, files)
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -693,16 +712,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let debug = false;
 
     // Choosing game to laod
-    let quirks: Quirks = Quirks::new(true, false, false, true, true);
-    let id = run_emulator(&video, &audio, &mut event_pump, "roms/menu.ch8".to_string(), quirks, debug).unwrap();
+    let quirks: Quirks = Quirks::new(Some(true), Some(false), Some(false), Some(true), Some(true));
+    let mut chip8 = Chip8::new(quirks);
+
+    chip8.load_rom("roms/menu-v1.ch8")?;
+    chip8.debug = debug;
+    let (mut chip8, files) = load_chip8_memory(&mut chip8, "data/roms.txt".to_string(), 0x500);
+    let id = run_emulator(&video, &audio, &mut event_pump, &mut chip8).unwrap();
 
     // Getting games filename
-    let filename = get_filename_from_id(id);
-    let filename = format!("{}{}", "roms/", filename);
-
+    let filename = &files[id as usize];
+    let filename = format!("roms/{}", filename);
+    
     // Running chosen game
-    let quirks: Quirks = Quirks::new(true, false, false, true, true);
-    run_emulator(&video, &audio, &mut event_pump, filename, quirks, debug)?;
+    let quirks: Quirks = Quirks::new(Some(true), Some(false), Some(false), Some(true), Some(true));
+    let mut chip8 = Chip8::new(quirks);
+
+    chip8.load_rom(&filename)?;
+    chip8.debug = debug;
+    run_emulator(&video, &audio, &mut event_pump, &mut chip8)?;
 
     Ok(())
 }
