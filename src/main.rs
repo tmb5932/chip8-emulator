@@ -4,11 +4,18 @@ use sdl2::{event::Event, keyboard::Keycode, pixels::PixelFormatEnum, render::{Ca
 use std::time::{Duration, Instant};
 use sdl2::audio::{AudioCallback, AudioSpecDesired};
 
+// SDL2 Display Constants
 const DISPLAY_WIDTH: usize = 64;
 const DISPLAY_HEIGHT: usize = 32;
 const SCALE: u32 = 10;
+
+// Chip8 Memory Location Constants
 const FONTSET_START: usize = 0x50;
 const ROM_START: usize = 0x200;
+
+// Emulator Cycle Return Values
+const SUCCESSFUL_EXECUTION: u8 = 0;
+const EXIT_ROM: u8 = 1;
 
 struct SquareWave {
     phase_inc: f32,
@@ -210,13 +217,17 @@ impl Chip8 {
         Instruction::new(raw)
     }
 
-    pub fn execute(&mut self, inst: Instruction) -> std::io::Result<()> {
+    pub fn execute(&mut self, inst: Instruction) -> std::io::Result<u8> {
                 // Execute
                 match inst.nibble {
                     0x0 => {
                         match inst.nn {
                             0xE0 => { self.display = [[false; DISPLAY_WIDTH]; DISPLAY_HEIGHT]; },
-                            0xEE => { 
+                            0xEE => {
+                                // Return from main (close ROM)
+                                if self.sp == 0 {
+                                    return Ok(EXIT_ROM);
+                                }
                                 // return from sub function
                                 self.sp -= 1;
                                 self.pc = self.stack[self.sp];
@@ -501,10 +512,10 @@ impl Chip8 {
                         panic!("IMPOSSIBLE NIBBLE! {}", inst.instruction)
                     }
                 }
-                Ok(())        
+                Ok(SUCCESSFUL_EXECUTION)        
     }
 
-    pub fn cycle(&mut self) -> std::io::Result<()> {
+    pub fn cycle(&mut self) -> std::io::Result<u8> {
         // Fetch
         let instruction: Instruction = self.fetch();
         
@@ -550,72 +561,7 @@ pub fn update_texture(
     canvas.present();
 }
 
-pub fn choose_rom(video: &sdl2::VideoSubsystem, event_pump: &mut sdl2::EventPump) -> u8 {
-    let window = video.window("CHIP-8", DISPLAY_WIDTH as u32 * SCALE, DISPLAY_HEIGHT as u32 * SCALE)
-    .position_centered()
-    .opengl()
-    .build()
-    .unwrap();
-
-    let mut canvas = window.into_canvas().build().unwrap();
-    let texture_creator = canvas.texture_creator();
-
-    let mut texture = texture_creator
-    .create_texture_streaming(PixelFormatEnum::RGBA8888, DISPLAY_WIDTH as u32, DISPLAY_HEIGHT as u32)
-    .unwrap();
-
-    let mut chip8 = Chip8::new(Quirks::new(false, false, false, false, false));
-
-    chip8.load_rom("roms/menu-temp.ch8").unwrap();
-
-    'menu: loop {
-        // Handle keyboard
-        for event in event_pump.poll_iter() {
-            match event {
-                Event::Quit { .. } => break 'menu,
-                Event::KeyDown { keycode: Some(key), .. } => {
-                    match key {
-                        // Step one instruction when in debug mode
-                        Keycode::Space => {
-                            if chip8.debug {
-                                chip8.paused = false;
-                            }
-                        }
-        
-                        // Normal key mapping
-                        _ => {
-                            if let Some(index) = map_keycode(key) {
-                                chip8.keypad[index] = true;
-                            }
-                        }
-                    }
-                }
-                Event::KeyUp { keycode: Some(key), .. } => {
-                    if let Some(index) = map_keycode(key) {
-                        chip8.keypad[index] = false;
-                    }
-                }
-                _ => {}
-            }
-        }
-
-        // Run Cycle 
-        if !chip8.debug || (chip8.debug &&!chip8.paused) {
-            chip8.cycle().unwrap();
-        }
-
-        // Update Display
-        if chip8.draw_flag {
-            chip8.draw_flag = false;
-
-            update_texture(&mut canvas, &mut texture, chip8.display);
-        }
-    };
-
-    chip8.v[0] // Return the ID of the game selected
-}
-
-fn run_game(video: &sdl2::VideoSubsystem, audio: &sdl2::AudioSubsystem, event_pump: &mut sdl2::EventPump, rom: String, quirks: Quirks, debug: bool) -> Result<(), Box<dyn std::error::Error>> {
+fn run_emulator(video: &sdl2::VideoSubsystem, audio: &sdl2::AudioSubsystem, event_pump: &mut sdl2::EventPump, rom: String, quirks: Quirks, debug: bool) -> Result<u8, Box<dyn std::error::Error>> {
     // Build canvas, texture, audio, load ROM into chip8, start game loop
     let window = video.window("CHIP-8", DISPLAY_WIDTH as u32 * SCALE, DISPLAY_HEIGHT as u32 * SCALE)
     .position_centered()
@@ -706,7 +652,11 @@ fn run_game(video: &sdl2::VideoSubsystem, audio: &sdl2::AudioSubsystem, event_pu
 
         // Run Cycle 
         if !chip8.debug || (chip8.debug &&!chip8.paused) {
-            chip8.cycle().unwrap();
+            let result = chip8.cycle().unwrap();
+            
+            if result == EXIT_ROM {
+                break 'running;
+            }
         }
 
         // Update Display
@@ -724,7 +674,7 @@ fn run_game(video: &sdl2::VideoSubsystem, audio: &sdl2::AudioSubsystem, event_pu
         }
     };
 
-    Ok(())
+    Ok(chip8.v[0])  // Return the ID of the game selected (for when it is the selection menu)
 }
 
 pub fn get_filename_from_id(id: u8) -> &'static str {
@@ -740,21 +690,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut event_pump: sdl2::EventPump = sdl.event_pump().unwrap();
 
-    // GOTTEN FROM CHOOSING GAME
-    let id = choose_rom(&video, &mut event_pump);
-
-    let filename = get_filename_from_id(id);
-    let filename = format!("{}{}", "roms/", filename);
-    let load_store = true;
-    let clip = true;
-    let vf_reset = true;
-    let shift = false;
-    let jump = false;
-    let quirks = Quirks::new(load_store, shift, jump, vf_reset, clip);
-
     let debug = false;
 
-    run_game(&video, &audio, &mut event_pump, filename, quirks, debug)?;
+    // Choosing game to laod
+    let quirks: Quirks = Quirks::new(true, false, false, true, true);
+    let id = run_emulator(&video, &audio, &mut event_pump, "roms/menu.ch8".to_string(), quirks, debug).unwrap();
+
+    // Getting games filename
+    let filename = get_filename_from_id(id);
+    let filename = format!("{}{}", "roms/", filename);
+
+    // Running chosen game
+    let quirks: Quirks = Quirks::new(true, false, false, true, true);
+    run_emulator(&video, &audio, &mut event_pump, filename, quirks, debug)?;
 
     Ok(())
 }
