@@ -677,20 +677,21 @@ fn load_chip8_memory(chip8: &mut Chip8, path: String, start_location: usize) -> 
     let reader = io::BufReader::new(file);
 
     // For title in file
-    let mut i: u8 = 0;
+    let mut i: bool = false;
     let mut offset: usize = 0;
     let mut files: Vec<String> = Vec::new();
     for line_result in reader.lines() {
-        i += 1;
         let line = line_result.unwrap();
         let trimmed = line.trim();
-        if i % 2 == 0 {
+        if i {
             files.push(trimmed.to_owned()); // Add file names to file vector
+            i = false;
             continue;
+        } else {
+            i = true;
         }
-        
         let padded = format!("{:<11}", trimmed);
-        
+
         // Add to chip8 memory
         for ch in padded.chars() {
             let ascii_value = ch as u8;
