@@ -690,14 +690,15 @@ fn load_chip8_memory(chip8: &mut Chip8, path: String, start_location: usize) -> 
         } else {
             i = true;
         }
-        let padded = format!("{:<11}", trimmed);
 
         // Add to chip8 memory
-        for ch in padded.chars() {
+        for ch in trimmed.chars() {
             let ascii_value = ch as u8;
             chip8.memory[start_location + offset as usize] = ascii_value;
             offset += 1;
         }
+        chip8.memory[start_location + offset as usize] = 0x06; // ACK byte at end of each word
+        offset += 1;
     }
 
     (chip8, files)
@@ -716,7 +717,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let quirks: Quirks = Quirks::new(Some(true), Some(false), Some(false), Some(true), Some(true));
     let mut chip8 = Chip8::new(quirks);
 
-    chip8.load_rom("roms/menu-v1.ch8")?;
+    chip8.load_rom("roms/menu.ch8")?;
     chip8.debug = debug;
     let (mut chip8, files) = load_chip8_memory(&mut chip8, "data/roms.txt".to_string(), 0x500);
     let id = run_emulator(&video, &audio, &mut event_pump, &mut chip8).unwrap();
