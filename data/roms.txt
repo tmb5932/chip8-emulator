@@ -111,7 +111,7 @@ sierpinski.ch8
 SLIDE
 slide.ch8
 SOCCER
-soccor.ch8
+soccer.ch8
 SPACEFLIGHT
 space-flight.ch8
 SPACFIGHTER
